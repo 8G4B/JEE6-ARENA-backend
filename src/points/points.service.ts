@@ -6,7 +6,11 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, EntityManager } from 'typeorm';
-import { PointLedger, LedgerRefType } from './entities/point-ledger.entity';
+import {
+  PointLedger,
+  LedgerRefType,
+  LedgerReason,
+} from './entities/point-ledger.entity';
 import { PointBalance } from './entities/point-balance.entity';
 import { EarnPointDto } from './dto/earn-point.dto';
 import { SpendPointDto } from './dto/spend-point.dto';
@@ -25,7 +29,7 @@ export class PointsService {
     const balance = await this.balanceRepository.findOne({
       where: { discordId },
     });
-    return balance ? BigInt(balance.balance) : 0n;
+    return balance ? balance.balance : 0n;
   }
 
   async getLedger(
@@ -42,104 +46,147 @@ export class PointsService {
   async earn(
     dto: EarnPointDto,
   ): Promise<{ balance: string; ledgerId: string }> {
+    const amount = BigInt(dto.amount);
+    if (amount <= 0n) throw new BadRequestException('Amount must be positive');
+    if (amount > 2147483647n) {
+      throw new BadRequestException('Amount exceeds limit');
+    }
+
     return this.processTransaction(async (manager) => {
-      // 1. Check Idempotency
-      const existingLedger = await manager.findOne(PointLedger, {
-        where: { idempotencyKey: dto.idempotencyKey },
+      return this.earnInternal(manager, {
+        ...dto,
+        amount,
+        reason: dto.reason as LedgerReason,
       });
-      if (existingLedger) {
-        throw new ConflictException(
-          'Duplicate transaction (idempotency key conflict)',
-        );
-      }
-
-      // 2. Lock & Upsert Balance
-      let balanceEntity = await manager.findOne(PointBalance, {
-        where: { discordId: dto.discordId },
-        lock: { mode: 'pessimistic_write' },
-      });
-
-      if (!balanceEntity) {
-        balanceEntity = manager.create(PointBalance, {
-          discordId: dto.discordId,
-          balance: '0',
-        });
-        await manager.save(balanceEntity);
-      }
-
-      const currentBalance = BigInt(balanceEntity.balance);
-      const newBalance = currentBalance + BigInt(dto.amount);
-
-      // 3. Create Ledger
-      const ledger = manager.create(PointLedger, {
-        discordId: dto.discordId,
-        amount: dto.amount.toString(),
-        reason: dto.reason,
-        refType: dto.refType || LedgerRefType.ETC,
-        refId: dto.refId,
-        idempotencyKey: dto.idempotencyKey,
-      });
-      await manager.save(ledger);
-
-      // 4. Update Balance
-      balanceEntity.balance = newBalance.toString();
-      await manager.save(balanceEntity);
-
-      return { balance: balanceEntity.balance, ledgerId: ledger.id };
     });
+  }
+
+  async earnInternal(
+    manager: EntityManager,
+    data: {
+      discordId: string;
+      amount: bigint;
+      idempotencyKey: string;
+      reason?: LedgerReason;
+      refType?: LedgerRefType;
+      refId?: string;
+    },
+  ): Promise<{ balance: string; ledgerId: string }> {
+    const existingLedger = await manager.findOne(PointLedger, {
+      where: { idempotencyKey: data.idempotencyKey },
+    });
+    if (existingLedger) {
+      return {
+        balance: existingLedger.balanceAfter.toString(),
+        ledgerId: existingLedger.id,
+      };
+    }
+
+    let balanceEntity = await manager.findOne(PointBalance, {
+      where: { discordId: data.discordId },
+      lock: { mode: 'pessimistic_write' },
+    });
+
+    if (!balanceEntity) {
+      balanceEntity = manager.create(PointBalance, {
+        discordId: data.discordId,
+        balance: 0n,
+      });
+      await manager.save(balanceEntity);
+    }
+
+    const currentBalance = balanceEntity.balance;
+    const newBalance = currentBalance + data.amount;
+
+    const ledger = manager.create(PointLedger, {
+      discordId: data.discordId,
+      delta: data.amount,
+      balanceAfter: newBalance,
+      reason: data.reason || LedgerReason.ETC,
+      refType: data.refType || LedgerRefType.ETC,
+      refId: data.refId,
+      idempotencyKey: data.idempotencyKey,
+    });
+    await manager.save(ledger);
+
+    balanceEntity.balance = newBalance;
+    await manager.save(balanceEntity);
+
+    return { balance: newBalance.toString(), ledgerId: ledger.id };
   }
 
   async spend(
     dto: SpendPointDto,
   ): Promise<{ balance: string; ledgerId: string }> {
+    const amount = BigInt(dto.amount);
+    if (amount <= 0n) throw new BadRequestException('Amount must be positive');
+    if (amount > 2147483647n) {
+      throw new BadRequestException('Amount exceeds limit');
+    }
+
     return this.processTransaction(async (manager) => {
-      // 1. Check Idempotency
-      const existingLedger = await manager.findOne(PointLedger, {
-        where: { idempotencyKey: dto.idempotencyKey },
+      return this.spendInternal(manager, {
+        ...dto,
+        amount,
+        reason: dto.reason as LedgerReason,
       });
-      if (existingLedger) {
-        throw new ConflictException(
-          'Duplicate transaction (idempotency key conflict)',
-        );
-      }
-
-      // 2. Lock Balance
-      const balanceEntity = await manager.findOne(PointBalance, {
-        where: { discordId: dto.discordId },
-        lock: { mode: 'pessimistic_write' },
-      });
-
-      if (!balanceEntity) {
-        throw new BadRequestException('Insufficient funds (User not found)');
-      }
-
-      const currentBalance = BigInt(balanceEntity.balance);
-      const spendAmount = BigInt(dto.amount);
-
-      if (currentBalance < spendAmount) {
-        throw new BadRequestException('Insufficient funds');
-      }
-
-      const newBalance = currentBalance - spendAmount;
-
-      // 3. Create Ledger
-      const ledger = manager.create(PointLedger, {
-        discordId: dto.discordId,
-        amount: (-Number(dto.amount)).toString(),
-        reason: dto.reason,
-        refType: dto.refType || LedgerRefType.ETC,
-        refId: dto.refId,
-        idempotencyKey: dto.idempotencyKey,
-      });
-
-      await manager.save(ledger);
-
-      // 4. Update Balance
-      balanceEntity.balance = newBalance.toString();
-      await manager.save(balanceEntity);
-
-      return { balance: balanceEntity.balance, ledgerId: ledger.id };
     });
+  }
+
+  async spendInternal(
+    manager: EntityManager,
+    data: {
+      discordId: string;
+      amount: bigint;
+      idempotencyKey: string;
+      reason?: LedgerReason;
+      refType?: LedgerRefType;
+      refId?: string;
+    },
+  ): Promise<{ balance: string; ledgerId: string }> {
+    const existingLedger = await manager.findOne(PointLedger, {
+      where: { idempotencyKey: data.idempotencyKey },
+    });
+    if (existingLedger) {
+      return {
+        balance: existingLedger.balanceAfter.toString(),
+        ledgerId: existingLedger.id,
+      };
+    }
+
+    const balanceEntity = await manager.findOne(PointBalance, {
+      where: { discordId: data.discordId },
+      lock: { mode: 'pessimistic_write' },
+    });
+
+    if (!balanceEntity) {
+      throw new BadRequestException('Insufficient funds (User not found)');
+    }
+
+    const currentBalance = balanceEntity.balance;
+
+    if (currentBalance < data.amount) {
+      throw new BadRequestException('Insufficient funds');
+    }
+
+    const newBalance = currentBalance - data.amount;
+
+    const ledger = manager.create(PointLedger, {
+      discordId: data.discordId,
+      delta: -data.amount,
+      balanceAfter: newBalance,
+      reason: data.reason || LedgerReason.ETC,
+      refType: data.refType || LedgerRefType.ETC,
+      refId: data.refId,
+      idempotencyKey: data.idempotencyKey,
+    });
+
+    await manager.save(ledger);
+
+    balanceEntity.balance = newBalance;
+    await manager.save(balanceEntity);
+
+    return { balance: newBalance.toString(), ledgerId: ledger.id };
   }
 
   private async processTransaction<T>(

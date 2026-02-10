@@ -4,8 +4,8 @@ import {
   PrimaryGeneratedColumn,
   CreateDateColumn,
   Index,
-  Unique,
 } from 'typeorm';
+import { BigIntTransformer } from '../../common/transformers/bigint.transformer';
 
 export enum LedgerRefType {
   GAME = 'GAME',
@@ -14,8 +14,17 @@ export enum LedgerRefType {
   ETC = 'ETC',
 }
 
+export enum LedgerReason {
+  RACE_BET = 'RACE_BET',
+  RACE_PAYOUT = 'RACE_PAYOUT',
+  BUSTA_BET = 'BUSTA_BET',
+  BUSTA_PAYOUT = 'BUSTA_PAYOUT',
+  REFUND = 'REFUND',
+  ADMIN_ADJUST = 'ADMIN_ADJUST',
+  ETC = 'ETC',
+}
+
 @Entity('point_ledger')
-@Unique(['idempotencyKey'])
 export class PointLedger {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -24,22 +33,30 @@ export class PointLedger {
   @Column()
   discordId: string;
 
-  @Column({ type: 'bigint' })
-  amount: string; // TypeORM handles bigint as string
+  @Column({ type: 'bigint', transformer: BigIntTransformer })
+  delta: bigint;
 
-  @Column()
-  reason: string;
+  @Column({ type: 'bigint', transformer: BigIntTransformer })
+  balanceAfter: bigint;
+
+  @Column({
+    type: 'enum',
+    enum: LedgerReason,
+    default: LedgerReason.ETC,
+  })
+  reason: LedgerReason;
 
   @Column({
     type: 'enum',
     enum: LedgerRefType,
-    default: LedgerRefType.ETC,
+    nullable: true,
   })
   refType: LedgerRefType;
 
   @Column({ nullable: true })
   refId: string;
 
+  @Index({ unique: true })
   @Column()
   idempotencyKey: string;
 
