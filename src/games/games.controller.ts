@@ -13,7 +13,9 @@ import { GameType } from './entities/game-round.entity';
 import { PointsService } from '../points/points.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { GameBet } from './entities/game-bet.entity';
-import { Repository } from 'typeorm';
+import type { Repository } from 'typeorm';
+import type { Response } from 'express';
+import { Res } from '@nestjs/common';
 
 @Controller('games')
 export class GamesController {
@@ -61,6 +63,27 @@ export class GamesController {
   ) {
     return await this.betRepository.find({
       where: { roundId, discordId },
+    });
+  }
+
+  @Get('sse')
+  async getSSE(
+    @Query('types') types: string,
+    @Query('discordId') discordId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const eventStream = this.roundsService.getSSEStream(types, discordId);
+
+    eventStream.on('data', (data) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    });
+
+    res.on('close', () => {
+      eventStream.destroy();
     });
   }
 }

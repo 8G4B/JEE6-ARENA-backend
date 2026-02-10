@@ -17,6 +17,7 @@ import {
   LedgerReason,
   LedgerRefType,
 } from '../points/entities/point-ledger.entity';
+import { PassThrough } from 'stream';
 
 @Injectable()
 export class RoundsService {
@@ -223,5 +224,32 @@ export class RoundsService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  getSSEStream(types: string, discordId: string) {
+    const eventStream = new PassThrough();
+
+    const interval = setInterval(() => {
+      const event = {
+        ts: new Date().toISOString(),
+        type: types,
+        discordId,
+        event: 'ROUND_OPEN',
+        data: {
+          round: {
+            id: 'example-round-id',
+            status: 'OPEN',
+            type: types,
+          },
+        },
+      };
+      eventStream.write(`data: ${JSON.stringify(event)}\n\n`);
+    }, 5000);
+
+    eventStream.on('close', () => {
+      clearInterval(interval);
+    });
+
+    return eventStream;
   }
 }
