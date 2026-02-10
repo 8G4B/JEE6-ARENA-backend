@@ -55,7 +55,6 @@ export class GamesService {
       throw new BadRequestException('Session is not open for joining');
     }
 
-    // Check if already joined
     const existing = await this.participantRepository.findOne({
       where: { sessionId, discordId },
     });
@@ -63,7 +62,6 @@ export class GamesService {
       throw new ConflictException('Already joined');
     }
 
-    // Check entry fee
     const entryFee = session.config?.entryFee || 0;
 
     if (entryFee > 0) {

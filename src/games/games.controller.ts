@@ -1,65 +1,66 @@
 import {
   Controller,
+  Get,
   Post,
   Body,
   Param,
-  Get,
-  Patch,
-  ValidationPipe,
+  Query,
+  Headers,
+  BadRequestException,
 } from '@nestjs/common';
-import { GamesService } from './games.service';
-import { CreateGameDto } from './dto/create-game.dto';
-import { JoinGameDto } from './dto/join-game.dto';
-import { GameActionDto } from './dto/game-action.dto';
-import { GameSession, GameStatus } from './entities/game-session.entity';
-import { GameParticipant } from './entities/game-participant.entity';
+import { RoundsService } from './rounds.service';
+import { GameType } from './entities/game-round.entity';
+import { PointsService } from '../points/points.service';
+import { InjectRepository } from '@nestjs/typeorm';
+import { GameBet } from './entities/game-bet.entity';
+import { Repository } from 'typeorm';
 
 @Controller('games')
 export class GamesController {
-  constructor(private readonly gamesService: GamesService) {}
+  constructor(
+    private readonly roundsService: RoundsService,
+    private readonly pointsService: PointsService,
+    @InjectRepository(GameBet)
+    private readonly betRepository: Repository<GameBet>,
+  ) {}
 
-  @Post('sessions')
-  async createSession(@Body(new ValidationPipe()) dto: CreateGameDto) {
-    const session = await this.gamesService.createSession(dto);
-    return { ok: true, data: session };
+  @Get('rounds/current')
+  async getCurrentRound(@Query('type') type: string) {
+    return await this.roundsService.getCurrentOpenRound(type as GameType);
   }
 
-  @Get('sessions/:id')
-  async getSession(@Param('id') id: string) {
-    const session = await this.gamesService.getSession(id);
-    return { ok: true, data: session };
+  @Get('rounds/:id')
+  async getRound(@Param('id') id: string) {
+    return await this.roundsService.getRound(id);
   }
 
-  @Post('sessions/:id/join')
-  async joinSession(
-    @Param('id') id: string,
-    @Body(new ValidationPipe()) dto: JoinGameDto,
+  @Post('rounds/:id/bets')
+  async placeBet(
+    @Param('id') roundId: string,
+    @Headers('Idempotency-Key') idempotencyKey: string,
+    @Body() dto: { discordId: string; amount: string; choice: any },
   ) {
-    const participant: GameParticipant = await this.gamesService.joinSession(
-      id,
-      dto.discordId,
-    );
-    return { ok: true, data: participant };
+    if (!idempotencyKey) {
+      throw new BadRequestException('Idempotency-Key header is required');
+    }
+
+    const amount = BigInt(dto.amount);
+
+    return await this.roundsService.placeBet(roundId, {
+      discordId: dto.discordId,
+      amount,
+      choice: dto.choice as Record<string, any>,
+      idempotencyKey,
+    });
   }
 
-  @Post('sessions/:id/action')
-  async processAction(
-    @Param('id') id: string,
-    @Body(new ValidationPipe()) dto: GameActionDto,
+  @Get('rounds/:id/bets')
+  async getMyBets(
+    @Param('id') roundId: string,
+    @Query('discordId') discordId: string,
   ) {
-    const result: any = await this.gamesService.processAction(id, dto);
-    return { ok: true, data: result };
-  }
-
-  @Patch('sessions/:id/status')
-  async updateStatus(
-    @Param('id') id: string,
-    @Body('status') status: GameStatus,
-  ) {
-    const sessionByStatus: GameSession = await this.gamesService.updateStatus(
-      id,
-      status,
-    );
-    return { ok: true, data: sessionByStatus };
+    return await this.betRepository.find({
+      where: { roundId, discordId },
+    });
   }
 }
