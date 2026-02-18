@@ -23,6 +23,6 @@ export class AuthController {
     const { access_token, user } = this.authService.login(req.user);
 
     const frontendUrl = this.configService.get<string>('FRONTEND_URL');
-    res.redirect(`${frontendUrl}/auth/callback?token=${access_token}&discordId=${user.discordId}&username=${user.username}&avatar=${user.avatar}`);
+    res.redirect(`${frontendUrl}/login/callback?token=${access_token}&discordId=${user.discordId}&username=${user.username}&avatar=${user.avatar}`);
   }
 }

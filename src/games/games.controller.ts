@@ -7,7 +7,10 @@ import {
   Query,
   Headers,
   BadRequestException,
+  UseGuards,
+  Req,
 } from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RoundsService } from './rounds.service';
 import { GameType } from './entities/game-round.entity';
 import { PointsService } from '../points/points.service';
@@ -36,33 +39,38 @@ export class GamesController {
     return await this.roundsService.getRound(id);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Post('rounds/:id/bets')
   async placeBet(
     @Param('id') roundId: string,
     @Headers('Idempotency-Key') idempotencyKey: string,
-    @Body() dto: { discordId: string; amount: string; choice: any },
+    @Body() dto: { amount: string; choice: any },
+    @Req() req: any,
   ) {
     if (!idempotencyKey) {
       throw new BadRequestException('Idempotency-Key header is required');
     }
 
+    const { userId } = req.user; // Extracted from JWT by JwtStrategy
     const amount = BigInt(dto.amount);
 
     return await this.roundsService.placeBet(roundId, {
-      discordId: dto.discordId,
+      discordId: userId,
       amount,
       choice: dto.choice as Record<string, any>,
       idempotencyKey,
     });
   }
 
+  @UseGuards(JwtAuthGuard)
   @Get('rounds/:id/bets')
   async getMyBets(
     @Param('id') roundId: string,
-    @Query('discordId') discordId: string,
+    @Req() req: any,
   ) {
+    const { userId } = req.user;
     return await this.betRepository.find({
-      where: { roundId, discordId },
+      where: { roundId, discordId: userId },
     });
   }
 
